@@ -139,17 +139,11 @@ func (a *App) loadServices() {
 		if overridePath, ok := a.cfg.PathOverrides[svc.ID]; ok && overridePath != "" {
 			svc.InstallPath = overridePath
 		}
-		// 应用 DiscoveredServices 中持久化的修改（如 LogFile）
+		// 应用 DiscoveredServices 中持久化的修改（仅 LogFile，StartCmd/StopCmd 由插件管理）
 		for _, ds := range a.cfg.DiscoveredServices {
 			if ds.ID == svc.ID {
 				if ds.LogFile != "" {
 					svc.LogFile = ds.LogFile
-				}
-				if ds.StartCmd != "" {
-					svc.StartCmd = ds.StartCmd
-				}
-				if ds.StopCmd != "" {
-					svc.StopCmd = ds.StopCmd
 				}
 				break
 			}
