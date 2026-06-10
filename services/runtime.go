@@ -490,7 +490,15 @@ func (r *Runtime) Start(svc *Service) error {
 		svc.Status = StatusError
 		return fmt.Errorf("启动失败：%s 未配置启动命令（该服务可能由 IDE 管理）", svc.DisplayName)
 	}
+
+	// 兼容旧配置：如果 startCmd 包含内嵌参数（如 "startup.cmd -m standalone"），拆分
+	inlineArgs := splitInlineArgs(startCmd)
+	startCmd = inlineArgs[0]
+
 	var args []string
+	if len(inlineArgs) > 1 {
+		args = append(args, inlineArgs[1:]...)
+	}
 	for _, a := range svc.Args {
 		args = append(args, r.resolvePath(svc, a))
 	}
@@ -722,6 +730,29 @@ func HiddenCmd(command string, args ...string) *exec.Cmd {
 func isBatchFile(path string) bool {
 	lower := strings.ToLower(path)
 	return strings.HasSuffix(lower, ".bat") || strings.HasSuffix(lower, ".cmd")
+}
+
+// splitInlineArgs 拆分 StartCmd 中内嵌的参数
+// 如 "F:\nacos\bin\startup.cmd -m standalone" → ["F:\nacos\bin\startup.cmd", "-m", "standalone"]
+// 如 "F:\nginx\nginx.exe" → ["F:\nginx\nginx.exe"]
+func splitInlineArgs(cmd string) []string {
+	// 先检查完整路径是否是一个存在的文件
+	if _, err := os.Stat(cmd); err == nil {
+		return []string{cmd}
+	}
+	// 在空格处拆分，尝试第一个 token 作为文件
+	idx := strings.Index(cmd, " ")
+	if idx < 0 {
+		return []string{cmd}
+	}
+	exe := cmd[:idx]
+	rest := strings.TrimSpace(cmd[idx+1:])
+	if _, err := os.Stat(exe); err != nil {
+		// 第一个 token 也不是文件，返回原始值（让 exec 报出清晰错误）
+		return []string{cmd}
+	}
+	// 把 rest 按空格拆开（引号暂不处理，旧配置不会有引号）
+	return append([]string{exe}, strings.Fields(rest)...)
 }
 
 func buildEnv(svc *Service, r *Runtime) []string {
