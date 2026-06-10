@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"ServiceDesktop/services"
 )
@@ -21,14 +22,15 @@ func (p *nacosPlugin) Template() services.ServiceTemplate {
 			Name:        "Nacos",
 			DisplayName: "Nacos",
 			Category:    services.CategoryMiddleware,
-			// startup.cmd 不接收命令行参数，模式由环境变量 MODE 控制
-			StartCmd: `{install_path}\bin\startup.cmd`,
-			StopCmd:  `{install_path}\bin\shutdown.cmd`,
-			Port:     8848,
-			LogFile:  `{install_path}\logs\`,
-			Args:     []string{}, // 不传参数，脚本内部读取 MODE 环境变量
+			StartCmd:    `{install_path}\bin\startup.cmd`,
+			StopCmd:     `{install_path}\bin\shutdown.cmd`,
+			Port:        8848,
+			LogFile:     `{install_path}\logs\`,
+			// startup.cmd 解析 -m 参数（第 34-43 行），standalone 模式必须传 -m standalone
+			Args: []string{"-m", "standalone"},
 			EnvVars: map[string]string{
-				"MODE": "standalone",
+				// JDK 内存：standalone 模式建议 512m，避免占用过大
+				"CUSTOM_NACOS_MEMORY": "-Xms256m -Xmx512m -Xmn128m",
 			},
 			IsTemplate: true,
 		},
@@ -58,9 +60,33 @@ func (p *nacosPlugin) ConfigFiles(installPath string) []string {
 }
 
 func (p *nacosPlugin) BeforeStart(svc *services.Service) error {
-	if svc.InstallPath != "" {
-		_ = os.MkdirAll(filepath.Join(svc.InstallPath, "logs"), 0755)
+	if svc.InstallPath == "" {
+		return nil
 	}
+	_ = os.MkdirAll(filepath.Join(svc.InstallPath, "logs"), 0755)
+
+	// 自动修复 application.properties：standalone 模式禁用远程 address server
+	// 否则会尝试连接 jmenv.tbsite.net 导致 UnknownHostException 启动失败
+	confFile := filepath.Join(svc.InstallPath, "conf", "application.properties")
+	if data, err := os.ReadFile(confFile); err == nil {
+		content := string(data)
+		changed := false
+
+		// 确保使用本地文件成员发现，不连阿里云 address server
+		if !strings.Contains(content, "nacos.core.member.lookup.type") {
+			content += "\r\n# standalone 模式：使用本地文件发现成员，不依赖远程地址服务\r\nnacos.core.member.lookup.type=file\r\n"
+			changed = true
+		} else if !strings.Contains(content, "nacos.core.member.lookup.type=file") {
+			content = strings.ReplaceAll(content, "nacos.core.member.lookup.type=address", "nacos.core.member.lookup.type=file")
+			changed = true
+		}
+
+		if changed {
+			_ = os.WriteFile(confFile, []byte(content), 0644)
+		}
+	}
+	// 文件不存在则不处理（Nacos 首次启动会自动生成，下次启动时生效）
+
 	return nil
 }
 
