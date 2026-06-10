@@ -170,7 +170,10 @@ func (c *LogCollector) Unsubscribe(ch <-chan LogLine) {
 	for i, s := range c.subs {
 		if s == ch {
 			c.subs = append(c.subs[:i], c.subs[i+1:]...)
-			close(s)
+			func() {
+				defer func() { recover() }()
+				close(s)
+			}()
 			return
 		}
 	}
@@ -226,7 +229,10 @@ func (c *LogCollector) stop() {
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
 	for _, ch := range c.subs {
-		close(ch)
+		func() {
+			defer func() { recover() }()
+			close(ch)
+		}()
 	}
 	c.subs = nil
 }
@@ -467,11 +473,23 @@ func (r *Runtime) Start(svc *Service) error {
 
 	svc.Status = StatusStarting
 
+	// 调用插件预检钩子
+	if p, ok := GetPlugin(svc.ID); ok {
+		if err := p.BeforeStart(svc); err != nil {
+			svc.Status = StatusError
+			return fmt.Errorf("启动 %s 失败: %w", svc.DisplayName, err)
+		}
+	}
+
 	collector := r.getOrCreateCollector(svc.ID)
 	collector.Clear()
 	collector.systemLine(fmt.Sprintf("► 正在启动 %s ...", svc.DisplayName))
 
 	startCmd := r.resolvePath(svc, svc.StartCmd)
+	if startCmd == "" {
+		svc.Status = StatusError
+		return fmt.Errorf("启动失败：%s 未配置启动命令（该服务可能由 IDE 管理）", svc.DisplayName)
+	}
 	var args []string
 	for _, a := range svc.Args {
 		args = append(args, r.resolvePath(svc, a))
@@ -550,46 +568,78 @@ func (r *Runtime) Stop(svc *Service) error {
 	collector := r.getOrCreateCollector(svc.ID)
 	collector.systemLine(fmt.Sprintf("► 正在停止 %s ...", svc.DisplayName))
 	svc.Status = StatusStopping
+	var errs []string
 
-	// 1. 停止日志收集
-	r.mu.Lock()
-	if c, ok := r.collectors[svc.ID]; ok {
-		c.stop()
-		delete(r.collectors, svc.ID)
-	}
-	r.mu.Unlock()
-
-	// 2. 执行停止命令
+	// 1. 先尝试 StopCmd
 	if svc.StopCmd != "" {
 		stopCmd := r.resolvePath(svc, svc.StopCmd)
 		cmd := hiddenCmd("cmd", "/c", stopCmd)
 		cmd.Dir = svc.InstallPath
 		cmd.Env = buildEnv(svc, r)
-		_ = cmd.Run()
+		if err := cmd.Run(); err != nil {
+			errs = append(errs, fmt.Sprintf("停止命令失败: %v", err))
+		}
+	} else if svc.Source != "smarttomcat" && svc.Source != "idea" {
+		errs = append(errs, "未配置停止命令")
 	}
 
-	time.Sleep(2 * time.Second)
+	// 2. 等待进程退出 + 端口释放（最多 15 秒）
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		stillAlive := false
+		if svc.Port > 0 && r.isPortOpen(svc.Port) {
+			stillAlive = true
+		} else if svc.Pid > 0 && isProcessAlive(svc.Pid) {
+			stillAlive = true
+		}
+		if !stillAlive {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 
-	// 3. 端口仍占用则强制杀进程
+	// 3. 若进程仍在运行，强制杀掉
+	forceKilled := false
 	if svc.Port > 0 && r.isPortOpen(svc.Port) {
 		if pid := r.findPidByPort(svc.Port); pid > 0 {
-			_ = killProcess(pid)
+			if killProcess(pid) == nil {
+				forceKilled = true
+			}
 		}
-	} else if svc.Pid > 0 {
-		_ = killProcess(svc.Pid)
+	} else if svc.Pid > 0 && isProcessAlive(svc.Pid) {
+		if killProcess(svc.Pid) == nil {
+			forceKilled = true
+		}
 	}
 
-	// 等待端口释放
+	// 等待端口释放（最多 5 秒）
 	if svc.Port > 0 {
-		_ = r.waitForPortClosed(svc.Port, 10*time.Second)
+		_ = r.waitForPortClosed(svc.Port, 5*time.Second)
 	}
+
+	// 4. 最后停止日志收集器
+	collector.systemLine(fmt.Sprintf("► %s 已停止%s", svc.DisplayName,
+		map[bool]string{true: "（强制终止）", false: ""}[forceKilled]))
 
 	r.mu.Lock()
+	if c, ok := r.collectors[svc.ID]; ok {
+		c.stop()
+		delete(r.collectors, svc.ID)
+	}
 	delete(r.processes, svc.ID)
 	r.mu.Unlock()
 
 	svc.Status = StatusStopped
 	svc.Pid = 0
+
+	// 调用插件清理钩子
+	if p, ok := GetPlugin(svc.ID); ok {
+		_ = p.AfterStop(svc)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
 	return nil
 }
 

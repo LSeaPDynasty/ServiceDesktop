@@ -124,9 +124,13 @@ func (a *App) T(key string) string {
 func (a *App) loadServices() {
 	a.services = make([]*services.Service, 0)
 
-	// 1. 加载预置模板
-	for _, tpl := range services.DefaultRegistry() {
+	// 1. 加载预置插件模板
+	for _, p := range services.GetAllPlugins() {
+		tpl := p.Template()
 		svc := tpl.Service
+		// 深拷贝引用类型，避免多实例共享底层 map/slice
+		svc.EnvVars = copyEnvVars(tpl.EnvVars)
+		svc.Args = copyStringSlice(tpl.Args)
 		if svc.InstallPath == "" || svc.InstallPath == "{install_path}" {
 			if detected := services.ResolveInstallPath(tpl.DetectPaths); detected != "" {
 				svc.InstallPath = detected
@@ -204,14 +208,18 @@ func (a *App) loadServices() {
 	// 4. 运行自动发现，新服务持久化到配置
 	existingPorts := make(map[int]bool)
 	for _, svc := range a.services {
-		existingPorts[svc.Port] = true
+		if svc.Port > 0 {
+			existingPorts[svc.Port] = true
+		}
 	}
 	result := services.RunDiscovery()
 	for _, d := range result.Instances {
-		if existingPorts[d.Port] {
+		if d.Port > 0 && existingPorts[d.Port] {
 			continue
 		}
-		existingPorts[d.Port] = true
+		if d.Port > 0 {
+			existingPorts[d.Port] = true
+		}
 
 		svc := services.Service{
 			ID:          d.ID,
@@ -263,7 +271,7 @@ func (a *App) RestartService(id string) *StartResult {
 	if svc == nil {
 		return &StartResult{Success: false, Error: "服务未找到"}
 	}
-	_ = a.runtime.Stop(svc)
+	stopErr := a.runtime.Stop(svc)
 	// 轮询端口释放，最多等 15 秒，不再硬编码 sleep
 	if svc.Port > 0 {
 		deadline := time.Now().Add(15 * time.Second)
@@ -272,6 +280,14 @@ func (a *App) RestartService(id string) *StartResult {
 				break
 			}
 			time.Sleep(300 * time.Millisecond)
+		}
+		// 如果端口仍未释放，不继续启动
+		if a.runtime.IsPortOpen(svc.Port) {
+			detail := "端口未能在 15 秒内释放"
+			if stopErr != nil {
+				detail = detail + ": " + stopErr.Error()
+			}
+			return &StartResult{Success: false, Error: detail, Service: a.toDTO(svc)}
 		}
 	}
 	err := a.runtime.Start(svc)
@@ -325,25 +341,47 @@ func (a *App) KillProcess(pid int) string {
 	return "ok"
 }
 
+func (a *App) StopService(id string) ServiceDTO {
+	svc := a.findService(id)
+	if svc == nil {
+		dto := ServiceDTO{}
+		dto.Error = "服务未找到"
+		return dto
+	}
+	err := a.runtime.Stop(svc)
+	dto := a.toDTO(svc)
+	if err != nil {
+		dto.Error = err.Error()
+	}
+	// 推送状态变更到前端
+	a.pushStatusUpdate()
+	return dto
+}
+
 func (a *App) StartService(id string) *StartResult {
 	svc := a.findService(id)
 	if svc == nil {
 		return &StartResult{Success: false, Error: "服务未找到"}
 	}
 	err := a.runtime.Start(svc)
+	a.pushStatusUpdate()
 	if err != nil {
 		return &StartResult{Success: false, Error: err.Error(), Service: a.toDTO(svc)}
 	}
 	return &StartResult{Success: true, Service: a.toDTO(svc)}
 }
 
-func (a *App) StopService(id string) ServiceDTO {
-	svc := a.findService(id)
-	if svc == nil {
-		return ServiceDTO{}
+// pushStatusUpdate 向 UI 推送最新的服务状态列表
+func (a *App) pushStatusUpdate() {
+	if a.ctx == nil {
+		return
 	}
-	_ = a.runtime.Stop(svc)
-	return a.toDTO(svc)
+	dtos := a.toDTOs(a.services)
+	data, err := json.Marshal(dtos)
+	if err != nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "services-update", string(data))
 }
 
 func (a *App) ReadConfigFile(serviceID, fileName string) string {
@@ -376,39 +414,14 @@ func (a *App) GetConfigFiles(serviceID string) []string {
 	if svc == nil || svc.InstallPath == "" {
 		return []string{}
 	}
-	patterns := map[string][]string{
-		"tomcat":     {"conf\\server.xml", "conf\\catalina.properties", "conf\\web.xml"},
-		"redis":      {"redis.conf", "redis.windows.conf"},
-		"kafka":      {"config\\server.properties"},
-		"nacos":      {"conf\\application.properties"},
-		"nginx":      {"conf\\nginx.conf"},
-		"mysql":      {"my.ini"},
-		"postgresql": {"postgresql.conf"},
-		"mongodb":    {"mongod.cfg"},
+
+	// 优先委托给插件
+	if p, ok := services.GetPlugin(svc.ID); ok {
+		return p.ConfigFiles(svc.InstallPath)
 	}
-	name := strings.ToLower(svc.Name)
-	candidates, ok := patterns[name]
-	if !ok {
-		// 通过前缀匹配（如 "Tomcat(8080)" → "tomcat"）
-		for key := range patterns {
-			if strings.HasPrefix(name, key) {
-				candidates = patterns[key]
-				ok = true
-				break
-			}
-		}
-	}
-	if !ok {
-		return []string{}
-	}
-	var found []string
-	for _, rel := range candidates {
-		fullPath := filepath.Join(svc.InstallPath, rel)
-		if _, err := os.Stat(fullPath); err == nil {
-			found = append(found, rel)
-		}
-	}
-	return found
+
+	// 无插件匹配的服务（自定义/发现）返回空
+	return []string{}
 }
 
 // GetLogContent 读取日志内容（兼容旧模式：直接文件或第一个日志文件）
@@ -419,24 +432,36 @@ func (a *App) GetLogContent(serviceID string) string {
 	}
 	path := strings.ReplaceAll(svc.LogFile, "{install_path}", svc.InstallPath)
 
-	// 如果是目录，读取第一个非空文件
+	// 如果是目录，读取第一个非空文件（按修改时间倒序）
 	if strings.HasSuffix(path, "\\") || strings.HasSuffix(path, "/") {
 		entries, err := os.ReadDir(path)
 		if err != nil {
 			return ""
 		}
+		type fileInfo struct {
+			name string
+			mod  time.Time
+		}
+		var files []fileInfo
 		for _, e := range entries {
 			if !e.IsDir() {
 				fi, _ := e.Info()
 				if fi == nil || fi.Size() == 0 {
 					continue
 				}
-				data, err := os.ReadFile(filepath.Join(path, e.Name()))
-				if err != nil {
-					continue
-				}
-				return string(data)
+				files = append(files, fileInfo{name: e.Name(), mod: fi.ModTime()})
 			}
+		}
+		// 按修改时间倒序（最新在前）
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].mod.After(files[j].mod)
+		})
+		for _, f := range files {
+			data, err := os.ReadFile(filepath.Join(path, f.name))
+			if err != nil {
+				continue
+			}
+			return string(data)
 		}
 		return ""
 	}
@@ -493,7 +518,7 @@ func (a *App) GetLogFiles(serviceID string) []string {
 		for _, e := range entries {
 			if !e.IsDir() {
 				fi, _ := e.Info()
-				if fi != nil && fi.Size() == 0 {
+				if fi == nil || fi.Size() == 0 {
 					continue
 				}
 				files = append(files, fileInfo{name: e.Name(), mod: fi.ModTime()})
@@ -865,6 +890,7 @@ func (a *App) EditCustomService(id, name, displayName, category, installPath, st
 			svc.Port = port
 			svc.LogFile = logFile
 			svc.Args = splitArgs(args)
+			svc.EnvVars = parseEnvVars(envVars)
 			break
 		}
 	}
@@ -1013,6 +1039,47 @@ func splitArgs(s string) []string {
 		result = append(result, current)
 	}
 	return result
+}
+
+// parseEnvVars 将 "KEY=VAL;KEY2=VAL2" 格式的环境变量字符串转为 map
+func parseEnvVars(s string) map[string]string {
+	m := make(map[string]string)
+	if s == "" {
+		return m
+	}
+	for _, pair := range strings.Split(s, ";") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			m[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return m
+}
+
+// copyEnvVars 深拷贝环境变量 map
+func copyEnvVars(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// copyStringSlice 深拷贝字符串切片
+func copyStringSlice(src []string) []string {
+	if src == nil {
+		return nil
+	}
+	dst := make([]string, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // StreamLog 开始实时推送日志到前端（通过 Wails Events），使用订阅模式

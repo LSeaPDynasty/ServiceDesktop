@@ -68,19 +68,19 @@ var knownServices = []knownServiceDef{
 		[]string{"catalina", "tomcat", "bootstrap.jar"},
 		"{install_path}\\bin\\startup.bat", "{install_path}\\bin\\shutdown.bat", "{install_path}\\logs\\catalina.out"},
 	{"Redis", CategoryDatabase, []int{6379}, []string{"redis"},
-		"{install_path}\\redis-server.exe", "{install_path}\\redis-cli.exe shutdown", ""},
+		"{install_path}\\redis-server.exe", "", ""},
 	{"Kafka", CategoryMiddleware, []int{9092, 9093, 9094}, []string{"kafka"},
-		"{install_path}\\bin\\windows\\kafka-server-start.bat", "{install_path}\\bin\\windows\\kafka-server-stop.bat", ""},
+		"{install_path}\\bin\\windows\\kafka-server-start.bat", "", ""},
 	{"Nacos", CategoryMiddleware, []int{8848, 9848}, []string{"nacos"},
 		"{install_path}\\bin\\startup.cmd", "{install_path}\\bin\\shutdown.cmd", "{install_path}\\logs\\nacos.log"},
-	{"Nginx", CategoryMiddleware, []int{80, 443}, []string{"nginx"},
+	{"Nginx", CategoryMiddleware, []int{80, 443, 8080}, []string{"nginx"},
 		"{install_path}\\nginx.exe", "{install_path}\\nginx.exe -s stop", ""},
 	{"MySQL", CategoryDatabase, []int{3306, 3307}, []string{"mysql", "mysqld"},
-		"{install_path}\\bin\\mysqld.exe", "{install_path}\\bin\\mysqladmin.exe -u root shutdown", ""},
+		"{install_path}\\bin\\mysqld.exe", "", ""},
 	{"PostgreSQL", CategoryDatabase, []int{5432, 5433}, []string{"postgres", "pgsql"},
-		"{install_path}\\bin\\pg_ctl.exe start -D {install_path}\\data", "{install_path}\\bin\\pg_ctl.exe stop -D {install_path}\\data", ""},
+		"{install_path}\\bin\\pg_ctl.exe", "{install_path}\\bin\\pg_ctl.exe stop -D {install_path}\\data -m fast", ""},
 	{"MongoDB", CategoryDatabase, []int{27017, 27018}, []string{"mongod", "mongo"},
-		"{install_path}\\bin\\mongod.exe", "{install_path}\\bin\\mongod.exe --shutdown", ""},
+		"{install_path}\\bin\\mongod.exe", "", ""},
 }
 
 func buildPortMap() map[int]knownServiceDef {
@@ -347,7 +347,7 @@ func dockerScan() []ServiceInstance {
 
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "{") {
+		if line == "" || !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
 			continue
 		}
 

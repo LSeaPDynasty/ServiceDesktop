@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Config 应用配置
 type Config struct {
+	mu                 sync.Mutex                `json:"-"`
 	Language           string                    `json:"language"`
 	AutoStart          bool                      `json:"auto_start"`
 	UserServices       []UserServiceConf         `json:"user_services"`
@@ -107,6 +109,9 @@ func Load() *Config {
 
 // Save 保存配置到文件
 func (c *Config) Save() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	path, err := configPath()
 	if err != nil {
 		return err
