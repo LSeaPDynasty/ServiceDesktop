@@ -5,7 +5,7 @@ import { renderSidebar, filterServices, toggleGroup } from './sidebar.js';
 import { renderDetail, getSelectedId, setSelectedId, getServices, setServices, onLogSourceChange, doStartService, doStopService, doRestartService, doStartAllServices, doStopAllServices } from './detail.js';
 import { showLogs, switchToWatch, setWatchPath, onLogTypeChange, loadLogFileDate, getLogViewMode, getAutoScrollLog, setAutoScrollLog } from './log.js';
 import { showConfig, saveConfigFile } from './config.js';
-import { editInstallPath, confirmPathEdit, browseFolder, openFolder, showAddService, confirmAddService, showEditService, confirmEditService, deleteCurrentService, showSettings, saveSettings, showServiceConfig } from './modals.js';
+import { editInstallPath, confirmPathEdit, browseFolder, openFolderCmd, showAddService, confirmAddService, showEditService, confirmEditService, deleteCurrentService, showSettings, saveSettings, showServiceConfig } from './modals.js';
 import { GetServices } from '../../wailsjs/go/main/App.js';
 import { EventsOn } from '../../wailsjs/runtime/runtime.js';
 
@@ -45,7 +45,8 @@ window.addEventListener('DOMContentLoaded', async () => {
             if (data.lines) {
                 try {
                     const logLines = JSON.parse(data.lines);
-                    if (el && document.getElementById('logModal').classList.contains('show') && getLogViewMode() === 'watch') {
+                    const logModal = document.getElementById('logModal');
+                if (el && logModal && logModal.classList.contains('show') && getLogViewMode() === 'watch') {
                         el.innerHTML = renderStructuredLines(logLines);
                         if (getAutoScrollLog()) el.scrollTop = el.scrollHeight;
                     }
@@ -86,16 +87,16 @@ window.restartService = doRestartService;
 window.startAllServices = doStartAllServices;
 window.stopAllServices = doStopAllServices;
 
-window.editInstallPath = editInstallPath;
-window.confirmPathEdit = confirmPathEdit;
+window.editInstallPath = (svc) => editInstallPath(svc);
+window.confirmPathEdit = () => confirmPathEdit(selectedId);
 window.browseFolder = browseFolder;
-window.openFolder = openFolder;
+window.openFolder = (svcId) => openFolderCmd(svcId);
 
 window.showAddService = showAddService;
 window.confirmAddService = confirmAddService;
-window.showEditService = showEditService;
-window.confirmEditService = confirmEditService;
-window.deleteCurrentService = deleteCurrentService;
+window.showEditService = (svcId) => showEditService(svcId);
+window.confirmEditService = () => confirmEditService(selectedId);
+window.deleteCurrentService = () => deleteCurrentService(selectedId);
 
 window.showSettings = showSettings;
 window.saveSettings = saveSettings;
@@ -108,7 +109,7 @@ window.onLogTypeChange = onLogTypeChange;
 window.loadLogFileDate = () => loadLogFileDate(selectedId);
 window.onLogSourceChange = onLogSourceChange;
 window.saveConfigFile = () => saveConfigFile(selectedId);
-window.showServiceConfig = () => { if(selectedId) showServiceConfig(selectedId); };
+window.showServiceConfig = () => { const svc = services.find(s => s.id === selectedId); if (svc) showServiceConfig(selectedId, svc.name); };
 
 window.QuitApp = async () => {
     const { QuitApp } = await import('../../wailsjs/go/main/App.js');

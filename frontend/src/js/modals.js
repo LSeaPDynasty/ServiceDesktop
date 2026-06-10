@@ -1,21 +1,11 @@
-// modals.js — 模态框：路径编辑、添加/编辑/删除服务、设置、服务专属配置
+// modals.js — 模态框：路径编辑、添加/编辑/删除服务、设置
 
 import { toast } from './utils.js';
 import { SetInstallPath, AddCustomService, BrowseFolder, OpenFolder, GetAppConfig, SetAppConfig, GetServiceDetail, EditCustomService, DeleteCustomService } from '../../wailsjs/go/main/App.js';
 
-// 全局引用
-let _selectedId = null;
-let _services = [];
-
-export function initModals(getSelectedId, getServices) {
-    _selectedId = getSelectedId;
-    _services = getServices;
-}
-
 // ---------- 路径编辑 ----------
 
-export function editInstallPath() {
-    const svc = (_services && _services.find) ? _services.find(s => s.id === (_selectedId && typeof _selectedId === 'function' ? _selectedId() : _selectedId)) : null;
+export function editInstallPath(svc) {
     if (!svc) return;
     document.getElementById('pathModalSvcName').textContent = svc.name;
     document.getElementById('pathInput').value = svc.installPath || '';
@@ -23,11 +13,10 @@ export function editInstallPath() {
     setTimeout(() => document.getElementById('pathInput').focus(), 200);
 }
 
-export async function confirmPathEdit() {
+export async function confirmPathEdit(svcId) {
     const path = document.getElementById('pathInput').value.trim();
     if (!path) { toast('路径不能为空'); return; }
-    const id = typeof _selectedId === 'function' ? _selectedId() : _selectedId;
-    const result = await SetInstallPath(id, path);
+    const result = await SetInstallPath(svcId, path);
     if (result === 'ok') {
         closeModal('pathModal');
         toast('路径已保存');
@@ -42,10 +31,9 @@ export async function browseFolder() {
     } catch(e) { toast('选择失败: ' + e); }
 }
 
-export function openFolder() {
-    const id = typeof _selectedId === 'function' ? _selectedId() : _selectedId;
-    if (!id) return;
-    OpenFolder(id).then(r => { if (r !== 'ok') toast(r); });
+export function openFolderCmd(svcId) {
+    if (!svcId) return;
+    OpenFolder(svcId).then(r => { if (r !== 'ok') toast(r); });
 }
 
 // ---------- 添加服务 ----------
@@ -82,10 +70,10 @@ export async function confirmAddService() {
 
 // ---------- 编辑服务 ----------
 
-export function showEditService() {
-    const id = typeof _selectedId === 'function' ? _selectedId() : _selectedId;
-    if (!id) return;
-    GetServiceDetail(id).then(detail => {
+export async function showEditService(svcId) {
+    if (!svcId) return;
+    try {
+        const detail = await GetServiceDetail(svcId);
         if (!detail) { toast('无法获取服务详情'); return; }
         document.getElementById('esName').value = detail.name || '';
         document.getElementById('esDisplayName').value = detail.displayName || '';
@@ -96,12 +84,11 @@ export function showEditService() {
         document.getElementById('esStopCmd').value = detail.stopCmd || '';
         document.getElementById('esLogFile').value = detail.logFile || '';
         openModal('editServiceModal');
-    }).catch(e => toast('加载服务详情失败: ' + e));
+    } catch(e) { toast('加载服务详情失败: ' + e); }
 }
 
-export async function confirmEditService() {
-    const id = typeof _selectedId === 'function' ? _selectedId() : _selectedId;
-    if (!id) return;
+export async function confirmEditService(svcId) {
+    if (!svcId) return;
     const name = document.getElementById('esName').value.trim();
     const displayName = document.getElementById('esDisplayName').value.trim() || name;
     const category = document.getElementById('esCategory').value;
@@ -110,18 +97,16 @@ export async function confirmEditService() {
     const startCmd = document.getElementById('esStartCmd').value.trim();
     const stopCmd = document.getElementById('esStopCmd').value.trim();
     const logFile = document.getElementById('esLogFile').value.trim();
-    const result = await EditCustomService(id, name, displayName, category, path, startCmd, stopCmd, logFile, '', '', port);
+    const result = await EditCustomService(svcId, name, displayName, category, path, startCmd, stopCmd, logFile, '', '', port);
     if (result === 'ok') { closeModal('editServiceModal'); toast('已保存'); window.loadServices(); }
     else { toast('保存失败: ' + result); }
 }
 
-export async function deleteCurrentService() {
-    const id = typeof _selectedId === 'function' ? _selectedId() : _selectedId;
-    if (!confirm('确定要删除此服务吗？')) return;
-    const result = await DeleteCustomService(id);
+export async function deleteCurrentService(svcId) {
+    if (!svcId || !confirm('确定要删除此服务吗？')) return;
+    const result = await DeleteCustomService(svcId);
     if (result === 'ok') {
         closeModal('editServiceModal');
-        if (typeof _selectedId === 'function') _selectedId = () => null;
         toast('已删除');
         window.loadServices();
         document.getElementById('detailPanel').innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-tertiary)">← 请从左侧选择一个服务</div>';
@@ -149,15 +134,14 @@ export async function saveSettings() {
 
 // ---------- 服务专属配置面板路由 ----------
 
-export async function showServiceConfig(serviceId) {
-    // 动态加载服务专属配置面板
-    const svc = (_services && _services.find) ? _services.find(s => s.id === serviceId) : null;
-    if (!svc) return;
-    const pluginId = svc.id.split('-')[0]; // tomcat-xxx → tomcat
+export async function showServiceConfig(svcId, svcName) {
+    if (!svcId) return;
+    const pluginId = svcId.split('-')[0]; // tomcat-xxx → tomcat
     try {
         const mod = await import(`./services/${pluginId}.js`);
-        if (mod && mod.showConfig) {
-            mod.showConfig(svc);
+        if (mod && mod.renderConfigPanel) {
+            const container = document.getElementById('detailPanel');
+            if (container) mod.renderConfigPanel(container, { id: svcId, name: svcName, installPath: '' });
             return;
         }
     } catch(e) { /* 无专属面板 */ }

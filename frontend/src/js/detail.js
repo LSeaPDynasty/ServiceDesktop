@@ -1,7 +1,7 @@
 // detail.js — 服务详情面板 + 启停操作 + 日志/配置预览
 
 import { statusLabel, statusBadgeClass, iconBg, svgIcon, toast, renderStructuredLines, escapeHtml } from './utils.js';
-import { GetConsoleLog, GetConfigFiles, ReadConfigFile, GetServiceLogSources, SetWatchLogFile, StartService, StopService, RestartService, StartAllServices, OpenFolder } from '../../wailsjs/go/main/App.js';
+import { GetConsoleLog, GetConfigFiles, ReadConfigFile, GetServiceLogSources, SetWatchLogFile } from '../../wailsjs/go/main/App.js';
 
 let _selectedId = null;
 let _services = [];
@@ -67,11 +67,12 @@ export function renderDetail(svc) {
             <div class="config-body" id="configPreview"><div style="color:var(--text-tertiary)">暂无配置文件</div></div>
         </div>`;
 
-    // 绑定事件
-    document.getElementById('installPathDisplay').onclick = () => window.editInstallPath();
-    document.getElementById('btnOpenFolder').onclick = () => openFolderCmd();
+    // 绑定事件（用闭包捕获当前服务 ID）
+    const svcId = svc.id;
+    document.getElementById('installPathDisplay').onclick = () => window.editInstallPath(svc);
+    document.getElementById('btnOpenFolder').onclick = () => window.openFolder(svcId);
     const btnEdit = document.getElementById('btnEditService');
-    if (btnEdit) btnEdit.onclick = () => window.showEditService();
+    if (btnEdit) btnEdit.onclick = () => window.showEditService(svcId);
     document.getElementById('linkShowLogs').onclick = () => window.showLogs();
     document.getElementById('btnShowLogs').onclick = () => window.showLogs();
     document.getElementById('linkShowConfig').onclick = () => window.showConfig();
@@ -80,11 +81,6 @@ export function renderDetail(svc) {
     loadLogPreview(svc.id);
     loadConfigPreview(svc.id);
     loadLogSources(svc.id);
-}
-
-async function openFolderCmd() {
-    const result = await OpenFolder(_selectedId);
-    if (result !== 'ok') toast(result);
 }
 
 async function loadLogSources(id) {
