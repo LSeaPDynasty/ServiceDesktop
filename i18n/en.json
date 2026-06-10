@@ -1,0 +1,62 @@
+{
+  "app.name": "ServiceDesktop",
+  "app.title": "Local Dev Service Manager",
+
+  "status.running": "Running",
+  "status.stopped": "Stopped",
+  "status.error": "Error",
+  "status.starting": "Starting...",
+  "status.stopping": "Stopping...",
+
+  "button.start": "Start",
+  "button.stop": "Stop",
+  "button.restart": "Restart",
+  "button.refresh": "Refresh",
+  "button.add_service": "Add Service",
+  "button.edit": "Edit",
+  "button.delete": "Delete",
+  "button.save": "Save",
+  "button.cancel": "Cancel",
+  "button.logs": "Logs",
+
+  "category.middleware": "Middleware",
+  "category.database": "Database",
+  "category.custom": "Custom",
+  "category.language": "Language Runtime",
+
+  "dialog.add_service.title": "Add Custom Service",
+  "dialog.add_service.name": "Service Name",
+  "dialog.add_service.install_path": "Install Path",
+  "dialog.add_service.start_cmd": "Start Command",
+  "dialog.add_service.stop_cmd": "Stop Command",
+  "dialog.add_service.port": "Port",
+  "dialog.add_service.category": "Category",
+  "dialog.add_service.log_file": "Log File Path",
+  "dialog.add_service.args": "Arguments",
+  "dialog.add_service.env_vars": "Environment Variables (KEY=VAL;...)",
+  "dialog.add_service.placeholder.name": "e.g. MyApp",
+  "dialog.add_service.placeholder.path": "e.g. D:\\tools\\myapp",
+  "dialog.add_service.placeholder.start": "e.g. myapp.exe",
+  "dialog.add_service.placeholder.port": "e.g. 8080",
+
+  "systray.show": "Show Window",
+  "systray.quit": "Quit",
+  "systray.all_running": "All running",
+  "systray.some_stopped": "Some services stopped",
+
+  "log.title": "Logs - {name}",
+  "log.empty": "No logs yet",
+  "log.autoscroll": "Auto Scroll",
+
+  "toast.start_success": "{name} started successfully",
+  "toast.start_failed": "{name} start failed: {error}",
+  "toast.stop_success": "{name} stopped",
+  "toast.stop_failed": "{name} stop failed: {error}",
+
+  "service.detail": "Service Details",
+  "service.port": "Port: {port}",
+  "service.path": "Path: {path}",
+  "service.pid": "PID: {pid}",
+
+  "confirm.delete": "Are you sure you want to delete \"{name}\"?"
+}

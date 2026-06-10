@@ -1,0 +1,32 @@
+# 编译产物
+build/bin/
+build/*.exe
+*.exe
+
+# 前端 node
+frontend/node_modules/
+frontend/dist/
+
+# 配置（敏感）
+config.json
+_config.json
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 备份
+*_bak*
+*~
+
+# 代码索引
+.codegraph/
+
+# Windows 保留文件名（被工具错误创建）
+nul
+NUL
