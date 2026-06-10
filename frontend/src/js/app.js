@@ -6,8 +6,8 @@ import { renderDetail, getSelectedId, setSelectedId, getServices, setServices, o
 import { showLogs, switchToWatch, setWatchPath, onLogTypeChange, loadLogFileDate, getLogViewMode, getAutoScrollLog, setAutoScrollLog } from './log.js';
 import { showConfig, saveConfigFile } from './config.js';
 import { editInstallPath, confirmPathEdit, browseFolder, openFolder, showAddService, confirmAddService, showEditService, confirmEditService, deleteCurrentService, showSettings, saveSettings, showServiceConfig } from './modals.js';
-import { GetServices } from '../wailsjs/go/main/App.js';
-import { EventsOn } from '../wailsjs/runtime/runtime.js';
+import { GetServices } from '../../wailsjs/go/main/App.js';
+import { EventsOn } from '../../wailsjs/runtime/runtime.js';
 
 let services = [];
 let selectedId = null;
@@ -111,7 +111,7 @@ window.saveConfigFile = () => saveConfigFile(selectedId);
 window.showServiceConfig = () => { if(selectedId) showServiceConfig(selectedId); };
 
 window.QuitApp = async () => {
-    const { QuitApp } = await import('../wailsjs/go/main/App.js');
+    const { QuitApp } = await import('../../wailsjs/go/main/App.js');
     QuitApp();
 };
 
