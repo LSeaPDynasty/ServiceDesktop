@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"ServiceDesktop/services"
@@ -65,27 +66,24 @@ func (p *nacosPlugin) BeforeStart(svc *services.Service) error {
 	}
 	_ = os.MkdirAll(filepath.Join(svc.InstallPath, "logs"), 0755)
 
-	// 自动修复 application.properties：standalone 模式禁用远程 address server
-	// 否则会尝试连接 jmenv.tbsite.net 导致 UnknownHostException 启动失败
+	// 自动修复 application.properties：禁用远程 address server
+	// Nacos 默认用 address-server 模式连接 jmenv.tbsite.net，离线环境必崩
+	// 写入 nacos.core.member.lookup.type=file 改成本地文件发现
 	confFile := filepath.Join(svc.InstallPath, "conf", "application.properties")
-	if data, err := os.ReadFile(confFile); err == nil {
-		content := string(data)
-		changed := false
-
-		// 确保使用本地文件成员发现，不连阿里云 address server
-		if !strings.Contains(content, "nacos.core.member.lookup.type") {
-			content += "\r\n# standalone 模式：使用本地文件发现成员，不依赖远程地址服务\r\nnacos.core.member.lookup.type=file\r\n"
-			changed = true
-		} else if !strings.Contains(content, "nacos.core.member.lookup.type=file") {
-			content = strings.ReplaceAll(content, "nacos.core.member.lookup.type=address", "nacos.core.member.lookup.type=file")
-			changed = true
-		}
-
-		if changed {
-			_ = os.WriteFile(confFile, []byte(content), 0644)
-		}
+	data, err := os.ReadFile(confFile)
+	if err != nil {
+		return nil // 文件不存在，Nacos 首次启动会生成，下次生效
 	}
-	// 文件不存在则不处理（Nacos 首次启动会自动生成，下次启动时生效）
+	content := string(data)
+
+	// 移除所有 member.lookup.type 行（注释或非注释）
+	re := regexp.MustCompile(`(?m)^[#\s]*nacos\.core\.member\.lookup\.type[= ].*$`)
+	if re.MatchString(content) {
+		content = re.ReplaceAllString(content, "")
+	}
+	// 追加有效配置
+	content = strings.TrimRight(content, "\r\n") + "\r\n\r\n# standalone 模式：本地文件成员发现\r\nnacos.core.member.lookup.type=file\r\n"
+	_ = os.WriteFile(confFile, []byte(content), 0644)
 
 	return nil
 }

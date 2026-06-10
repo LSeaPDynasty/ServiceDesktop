@@ -505,7 +505,20 @@ func (r *Runtime) Start(svc *Service) error {
 
 	var cmd *exec.Cmd
 	if isBatchFile(startCmd) {
-		cmd = hiddenCmd("cmd", append([]string{"/c", startCmd}, args...)...)
+		// cmd /c 需要命令+参数合为一个字符串，否则 %* 在 batch 脚本中无法正确展开
+		all := append([]string{startCmd}, args...)
+		var sb strings.Builder
+		for i, a := range all {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			if strings.Contains(a, " ") {
+				fmt.Fprintf(&sb, `"%s"`, a)
+			} else {
+				sb.WriteString(a)
+			}
+		}
+		cmd = hiddenCmd("cmd", "/c", sb.String())
 	} else {
 		cmd = hiddenCmd(startCmd, args...)
 	}
