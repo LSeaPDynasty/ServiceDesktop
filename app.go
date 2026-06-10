@@ -148,6 +148,12 @@ func (a *App) loadServices() {
 				break
 			}
 		}
+		// 恢复用户保存的启动参数
+		if profileArgs, ok := a.cfg.StartProfiles[svc.ID]; ok {
+			if defaultArgs, ok := profileArgs["_default"]; ok && defaultArgs != "" {
+				svc.Args = splitArgs(defaultArgs)
+			}
+		}
 		svc.Status = a.runtime.CheckStatus(&svc)
 		a.services = append(a.services, &svc)
 	}

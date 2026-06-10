@@ -23,9 +23,9 @@ export function renderDetail(svc) {
     document.getElementById('btnStart').style.display = svc.status !== 1 ? 'inline-flex' : 'none';
     document.getElementById('btnRestart').style.display = svc.status === 1 ? 'inline-flex' : 'none';
 
-    // 内置模板不可编辑，自定义/发现服务可以编辑
+    // 所有服务都可编辑参数；自定义/发现服务可编辑完整配置
     const builtinIds = ['tomcat','redis','kafka','nacos','nginx','mysql','postgresql','mongodb'];
-    const canEdit = !builtinIds.some(id => svc.id === id || svc.id.startsWith(id + '-'));
+    const isTemplate = builtinIds.some(id => svc.id === id || svc.id.startsWith(id + '-'));
 
     const panel = document.getElementById('detailPanel');
     panel.innerHTML = `
@@ -36,7 +36,7 @@ export function renderDetail(svc) {
                 <div class="detail-meta-sub">
                     <span id="installPathDisplay" style="cursor:pointer;border-bottom:1px dashed var(--text-tertiary)" title="点击修改安装路径">${svc.installPath || '点击设置安装路径'}</span>
                     <button class="log-tiny-btn" style="padding:1px 6px;font-size:10px;vertical-align:middle" id="btnOpenFolder" title="打开文件夹">📂</button>
-                    ${canEdit ? `<button class="log-tiny-btn" style="padding:1px 6px;font-size:10px" id="btnEditService">✏️</button>` : ''}
+                    ${!isTemplate ? `<button class="log-tiny-btn" style="padding:1px 6px;font-size:10px" id="btnEditService">✏️</button>` : ''}
                     ${svc.pid ? `<span class="meta-sep">·</span><span>PID ${svc.pid}</span>` : ''}
                     <span class="meta-sep">·</span><span>${st}</span>
                 </div>
@@ -47,6 +47,10 @@ export function renderDetail(svc) {
             <div class="stat-card"><div class="stat-label">PID</div><div class="stat-value" style="font-size:15px">${svc.pid || '-'}</div></div>
             <div class="stat-card"><div class="stat-label">状态</div><div class="stat-value" style="font-size:15px">${st}</div></div>
             <div class="stat-card"><div class="stat-label">分类</div><div class="stat-value" style="font-size:15px">${svc.category}</div></div>
+        </div>
+        <div class="section-heading">启动参数 <button class="log-tiny-btn" style="margin-left:8px;font-size:11px" id="btnSaveArgs">保存</button></div>
+        <div style="padding:0 18px 6px">
+            <input type="text" id="argsInput" style="width:100%;padding:6px 10px;font-family:var(--font-mono);font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text)" value="${escapeHtml(svc.args || '')}" placeholder="例如: -m standalone --port=8080">
         </div>
         <div class="section-heading">最近日志 <a class="section-link" id="linkShowLogs">查看全部 →</a></div>
         <div class="log-panel">
@@ -73,6 +77,13 @@ export function renderDetail(svc) {
     document.getElementById('btnOpenFolder').onclick = () => window.openFolder(svcId);
     const btnEdit = document.getElementById('btnEditService');
     if (btnEdit) btnEdit.onclick = () => window.showEditService(svcId);
+    document.getElementById('btnSaveArgs').onclick = async () => {
+        const args = document.getElementById('argsInput').value;
+        const { SetStartArgs } = await import('../../wailsjs/go/main/App.js');
+        const result = await SetStartArgs(svcId, args);
+        if (result === 'ok') toast('启动参数已保存');
+        else toast('保存失败: ' + result);
+    };
     document.getElementById('linkShowLogs').onclick = () => window.showLogs();
     document.getElementById('btnShowLogs').onclick = () => window.showLogs();
     document.getElementById('linkShowConfig').onclick = () => window.showConfig();
