@@ -727,6 +727,11 @@ func (r *Runtime) isPortOpen(port int) bool {
 	return true
 }
 
+// IsPortOpen 公开版本，供 app.go 使用
+func (r *Runtime) IsPortOpen(port int) bool {
+	return r.isPortOpen(port)
+}
+
 func (r *Runtime) findPidByPort(port int) int {
 	switch runtime.GOOS {
 	case "windows":

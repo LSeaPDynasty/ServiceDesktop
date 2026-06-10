@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"ServiceDesktop/config"
@@ -16,12 +19,13 @@ import (
 )
 
 type App struct {
-	ctx        context.Context
-	cfg        *config.Config
-	runtime    *services.Runtime
-	services   []*services.Service
-	i18n       map[string]string
-	isQuitting bool
+	ctx         context.Context
+	cfg         *config.Config
+	runtime     *services.Runtime
+	services    []*services.Service
+	i18n        map[string]string
+	isQuitting  bool
+	streamCancel map[string]context.CancelFunc
 }
 
 // ServiceDTO 给前端的数据传输对象
@@ -41,8 +45,9 @@ type ServiceDTO struct {
 
 func NewApp() *App {
 	a := &App{
-		cfg:     config.Load(),
-		runtime: services.NewRuntime(),
+		cfg:          config.Load(),
+		runtime:      services.NewRuntime(),
+		streamCancel: make(map[string]context.CancelFunc),
 	}
 	a.loadTranslations()
 	a.loadServices()
@@ -89,13 +94,15 @@ func (a *App) loadTranslations() {
 	}
 }
 
+//go:embed i18n/*.json
+var i18nFS embed.FS
+
 func loadTranslationMap(locale string) map[string]string {
 	paths := []string{
-		"frontend/i18n/" + locale + ".json",
 		"i18n/" + locale + ".json",
 	}
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := i18nFS.ReadFile(path)
 		if err != nil {
 			continue
 		}
@@ -170,7 +177,7 @@ func (a *App) loadServices() {
 		// 跳过已在列表中的（按端口去重）
 		already := false
 		for _, svc := range a.services {
-			if svc.Port == ds.Port || svc.ID == ds.ID {
+			if (svc.Port > 0 && svc.Port == ds.Port) || svc.ID == ds.ID {
 				already = true
 				break
 			}
@@ -257,7 +264,16 @@ func (a *App) RestartService(id string) *StartResult {
 		return &StartResult{Success: false, Error: "服务未找到"}
 	}
 	_ = a.runtime.Stop(svc)
-	time.Sleep(2 * time.Second)
+	// 轮询端口释放，最多等 15 秒，不再硬编码 sleep
+	if svc.Port > 0 {
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			if !a.runtime.IsPortOpen(svc.Port) {
+				break
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
 	err := a.runtime.Start(svc)
 	if err != nil {
 		return &StartResult{Success: false, Error: err.Error(), Service: a.toDTO(svc)}
@@ -265,20 +281,33 @@ func (a *App) RestartService(id string) *StartResult {
 	return &StartResult{Success: true, Service: a.toDTO(svc)}
 }
 
-// StartAllServices 启动所有服务
+// StartAllServices 并发启动所有服务（最多同时启动 4 个）
 func (a *App) StartAllServices() []StartResult {
+	sem := make(chan struct{}, 4) // 并发控制，最多 4 个同时启动
+	var mu sync.Mutex
 	var results []StartResult
+	var wg sync.WaitGroup
+
 	for _, svc := range a.services {
 		if svc.Status == services.StatusRunning {
 			continue
 		}
-		err := a.runtime.Start(svc)
-		if err != nil {
-			results = append(results, StartResult{Success: false, Error: err.Error(), Service: a.toDTO(svc)})
-		} else {
-			results = append(results, StartResult{Success: true, Service: a.toDTO(svc)})
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(s *services.Service) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			err := a.runtime.Start(s)
+			mu.Lock()
+			if err != nil {
+				results = append(results, StartResult{Success: false, Error: err.Error(), Service: a.toDTO(s)})
+			} else {
+				results = append(results, StartResult{Success: true, Service: a.toDTO(s)})
+			}
+			mu.Unlock()
+		}(svc)
 	}
+	wg.Wait()
 	return results
 }
 
@@ -322,7 +351,7 @@ func (a *App) ReadConfigFile(serviceID, fileName string) string {
 	if svc == nil || svc.InstallPath == "" {
 		return ""
 	}
-	path := svc.InstallPath + "\\" + fileName
+	path := filepath.Join(svc.InstallPath, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "// Error: " + err.Error()
@@ -335,7 +364,7 @@ func (a *App) SaveConfigFile(serviceID, fileName, content string) string {
 	if svc == nil || svc.InstallPath == "" {
 		return "service not found"
 	}
-	path := svc.InstallPath + "\\" + fileName
+	path := filepath.Join(svc.InstallPath, fileName)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "save failed: " + err.Error()
 	}
@@ -374,7 +403,7 @@ func (a *App) GetConfigFiles(serviceID string) []string {
 	}
 	var found []string
 	for _, rel := range candidates {
-		fullPath := svc.InstallPath + "\\" + rel
+		fullPath := filepath.Join(svc.InstallPath, rel)
 		if _, err := os.Stat(fullPath); err == nil {
 			found = append(found, rel)
 		}
@@ -614,9 +643,11 @@ func (a *App) GetLogFileContent(serviceID, fileName string) string {
 	} else if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
 		baseDir = resolved
 	} else if strings.Contains(resolved, "*") {
-		baseDir = filepath.Dir(resolved)
-		// 如果 glob 在路径中间（如 a/*/c），Dir 可能不够精确
-		baseDir = filepath.Dir(strings.ReplaceAll(resolved, "*", "x"))
+		// 去除通配符部分，找到真实目录
+		baseDir = resolved
+		for strings.ContainsAny(baseDir, "*?[") {
+			baseDir = filepath.Dir(baseDir)
+		}
 	} else {
 		baseDir = filepath.Dir(resolved)
 	}
@@ -637,7 +668,7 @@ func (a *App) GetLogFileContent(serviceID, fileName string) string {
 
 func (a *App) AddCustomService(name, displayName, category, installPath, startCmd, stopCmd, logFile, args, envVars string, port int) {
 	us := config.UserServiceConf{
-		ID:          "custom-" + name,
+		ID:          "custom-" + name + "-" + fmt.Sprint(time.Now().UnixMilli()),
 		Name:        name,
 		DisplayName: displayName,
 		Category:    category,
@@ -809,7 +840,7 @@ func setAutoStart(enable bool) {
 		"/t", "REG_SZ")
 	if enable {
 		exe, _ := os.Executable()
-		cmd.Args = append(cmd.Args, "/d", exe)
+		cmd.Args = append(cmd.Args, "/d", "\""+exe+"\"")
 	} else {
 		cmd = services.HiddenCmd("reg", "delete",
 			"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
@@ -938,9 +969,18 @@ func (a *App) DeleteCustomService(id string) string {
 			break
 		}
 	}
+	// 删除 UserServices
 	for i, us := range a.cfg.UserServices {
 		if us.ID == id {
 			a.cfg.UserServices = append(a.cfg.UserServices[:i], a.cfg.UserServices[i+1:]...)
+			_ = a.cfg.Save()
+			return "ok"
+		}
+	}
+	// 删除 DiscoveredServices（自动发现持久化的）
+	for i, ds := range a.cfg.DiscoveredServices {
+		if ds.ID == id {
+			a.cfg.DiscoveredServices = append(a.cfg.DiscoveredServices[:i], a.cfg.DiscoveredServices[i+1:]...)
 			_ = a.cfg.Save()
 			return "ok"
 		}
@@ -976,9 +1016,18 @@ func splitArgs(s string) []string {
 }
 
 // StreamLog 开始实时推送日志到前端（通过 Wails Events），使用订阅模式
+// 每次调用会取消该服务上一次的订阅，防止 goroutine 泄漏
 func (a *App) StreamLog(serviceID string) string {
+	// 取消旧订阅
+	if cancel, ok := a.streamCancel[serviceID]; ok {
+		cancel()
+	}
+
 	collector := a.runtime.Collector(serviceID)
 	ch := collector.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.streamCancel[serviceID] = cancel
 
 	go func() {
 		defer collector.Unsubscribe(ch)
@@ -989,6 +1038,8 @@ func (a *App) StreamLog(serviceID string) string {
 
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case line, ok := <-ch:
 				if !ok {
 					return

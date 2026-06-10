@@ -2,15 +2,9 @@ package main
 
 import (
 	"embed"
-	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"unsafe"
-
-	"ServiceDesktop/services"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -22,8 +16,11 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// Windows 命名互斥锁句柄，用于跨进程单实例保护
+var singletonMutex syscall.Handle
+
 func main() {
-	// 单实例保护
+	// 单实例保护：Windows 命名 Mutex 是原子操作，无 TOCTOU 竞态
 	if !trySingleton() {
 		msgBox("ServiceDesktop", "ServiceDesktop 已在运行中", 0)
 		os.Exit(0)
@@ -57,67 +54,39 @@ func main() {
 		println("Error:", err.Error())
 	}
 
-	// 清理锁文件
 	cleanupLock()
 }
 
-// ---------- 单实例锁 ----------
+// ---------- 单实例锁（Windows 命名 Mutex）----------
 
-func lockFilePath() string {
-	return filepath.Join(os.TempDir(), "servicedesktop.lock")
-}
+const mutexName = "Global\\ServiceDesktop-Singleton-{B4E9F8C2-1D3A-4E5F-8C7B-9A0D2E3F4C5B}"
 
 func trySingleton() bool {
-	lockFile := lockFilePath()
-
-	// 1. 尝试创建锁文件（独占模式）
-	f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err == nil {
-		fmt.Fprintf(f, "%d\n", os.Getpid())
-		f.Close()
-		return true
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	createMutex := kernel32.NewProc("CreateMutexW")
+	// 参数：安全属性(nil), 初始拥有者(false), 名称
+	name, _ := syscall.UTF16PtrFromString(mutexName)
+	ret, _, err := createMutex.Call(0, 0, uintptr(unsafe.Pointer(name)))
+	h := syscall.Handle(ret)
+	if h == 0 {
+		return true // 保守处理
 	}
 
-	// 2. 文件已存在，检查是否是有效进程
-	if os.IsExist(err) {
-		if !isProcessAliveFromLock(lockFile) {
-			// 旧进程已死，删除锁文件重试
-			os.Remove(lockFile)
-			f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-			if err == nil {
-				fmt.Fprintf(f, "%d\n", os.Getpid())
-				f.Close()
-				return true
-			}
-		}
+	// CreateMutexW 返回 error=183(ERROR_ALREADY_EXISTS) 表示已有实例
+	singletonMutex = h
+	if errno, ok := err.(syscall.Errno); ok && errno == 183 {
+		syscall.CloseHandle(h)
+		singletonMutex = 0
 		return false
 	}
 
 	return true
 }
 
-// isProcessAliveFromLock 读取锁文件中的 PID 检查进程是否存活
-func isProcessAliveFromLock(lockFile string) bool {
-	data, err := os.ReadFile(lockFile)
-	if err != nil {
-		return false
-	}
-	pidStr := strings.TrimSpace(string(data))
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil || pid <= 0 {
-		return false
-	}
-	// Windows 上用 tasklist 查进程（Signal 在 Windows 不可靠）
-	cmd := services.HiddenCmd("tasklist", "/fi", fmt.Sprintf("pid eq %d", pid), "/nh")
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(output), strconv.Itoa(pid))
-}
-
 func cleanupLock() {
-	os.Remove(lockFilePath())
+	if singletonMutex != 0 {
+		syscall.CloseHandle(singletonMutex)
+	}
 }
 
 // ---------- Windows 消息框 ----------
