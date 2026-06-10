@@ -414,6 +414,7 @@ type Runtime struct {
 	mu         sync.Mutex
 	processes  map[string]*exec.Cmd
 	collectors map[string]*LogCollector
+	starting   map[string]*sync.Mutex // 每个服务的启动锁，防止连点并发启动
 }
 
 // NewRuntime 创建运行时管理器
@@ -421,6 +422,7 @@ func NewRuntime() *Runtime {
 	return &Runtime{
 		processes:  make(map[string]*exec.Cmd),
 		collectors: make(map[string]*LogCollector),
+		starting:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -447,6 +449,22 @@ func (r *Runtime) resolvePath(svc *Service, raw string) string {
 
 // Start 启动服务
 func (r *Runtime) Start(svc *Service) error {
+	if svc.Status == StatusRunning {
+		return fmt.Errorf("%s 已在运行中", svc.DisplayName)
+	}
+
+	// 获取该服务的启动锁，防止连点并发启动同一服务
+	r.mu.Lock()
+	if r.starting[svc.ID] == nil {
+		r.starting[svc.ID] = &sync.Mutex{}
+	}
+	startMu := r.starting[svc.ID]
+	r.mu.Unlock()
+
+	startMu.Lock()
+	defer startMu.Unlock()
+
+	// 锁内二次检查，防止前一个启动刚完成又被 RefreshAll 重置状态
 	if svc.Status == StatusRunning {
 		return fmt.Errorf("%s 已在运行中", svc.DisplayName)
 	}
@@ -582,6 +600,22 @@ func (r *Runtime) Start(svc *Service) error {
 
 // Stop 停止服务
 func (r *Runtime) Stop(svc *Service) error {
+	if svc.Status == StatusStopped {
+		return nil
+	}
+
+	// 获取该服务的启动锁，也用于保护 Stop（防止并发的启/停竞态）
+	r.mu.Lock()
+	if r.starting[svc.ID] == nil {
+		r.starting[svc.ID] = &sync.Mutex{}
+	}
+	startMu := r.starting[svc.ID]
+	r.mu.Unlock()
+
+	startMu.Lock()
+	defer startMu.Unlock()
+
+	// 锁内二次检查
 	if svc.Status == StatusStopped {
 		return nil
 	}

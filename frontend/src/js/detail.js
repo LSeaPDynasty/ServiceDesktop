@@ -178,27 +178,45 @@ async function loadConfigPreview(id) {
 // 启停操作
 export async function doStartService() {
     if (!_selectedId) return;
-    const { StartService } = await import('../../wailsjs/go/main/App.js');
-    const result = await StartService(_selectedId);
-    if (!result.success) toast('❌ ' + result.error, 5000);
+    const btn = document.getElementById('btnStart');
+    if (btn) btn.disabled = true;
+    try {
+        const { StartService } = await import('../../wailsjs/go/main/App.js');
+        const result = await StartService(_selectedId);
+        if (!result.success) toast('❌ ' + result.error, 5000);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
     window.loadServices();
 }
 
 export async function doStopService() {
     if (!_selectedId) return;
-    const { StopService } = await import('../../wailsjs/go/main/App.js');
-    await StopService(_selectedId);
+    const btn = document.getElementById('btnStop');
+    if (btn) btn.disabled = true;
+    try {
+        const { StopService } = await import('../../wailsjs/go/main/App.js');
+        await StopService(_selectedId);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
     window.loadServices();
     toast('已停止');
 }
 
 export async function doRestartService() {
     if (!_selectedId) return;
-    toast('正在重启...');
-    const { RestartService } = await import('../../wailsjs/go/main/App.js');
-    const result = await RestartService(_selectedId);
-    if (!result.success) toast('❌ 重启失败: ' + result.error, 5000);
-    else toast('✅ 已重启');
+    const btn = document.getElementById('btnRestart');
+    if (btn) btn.disabled = true;
+    try {
+        toast('正在重启...');
+        const { RestartService } = await import('../../wailsjs/go/main/App.js');
+        const result = await RestartService(_selectedId);
+        if (!result.success) toast('❌ 重启失败: ' + result.error, 5000);
+        else toast('✅ 已重启');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
     window.loadServices();
 }
 
